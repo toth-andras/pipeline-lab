@@ -60,6 +60,9 @@ jf c show
 
 **В отчёт:** скриншот пустого репозитория на GitHub после первого пуша.
 
+<img width="3088" height="1408" alt="image" src="https://github.com/user-attachments/assets/ffad0b2a-b32d-480e-a8e8-2902fc597c5c" />
+
+
 ---
 
 ## Шаг 1. Локальный прогон — то, что CI будет делать за нас
@@ -77,6 +80,9 @@ pytest tests -v
 ```
 
 Всё зелёное? Посмотрите на приложение глазами:
+
+<img width="1248" height="440" alt="image" src="https://github.com/user-attachments/assets/c0d41d6e-d586-4335-ac05-20c90044e262" />
+
 
 ```bash
 python -m flask --app app run --port 8000 &
