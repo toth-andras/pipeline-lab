@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Сквозной пайплайн: от коммита до деплоя</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1e1e2e; color: #e6e6f0;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+  }
+  .slide {
+    display: none; height: 100vh; padding: 5vh 7vw;
+    flex-direction: column; justify-content: center;
+  }
+  .slide.active { display: flex; }
+  h1 { font-size: 3rem; color: #89b4fa; margin-bottom: 1.8rem; }
+  h2 { font-size: 2rem; color: #89b4fa; margin-bottom: 1.3rem; }
+  p, li { font-size: 1.35rem; line-height: 1.5; }
+  ul { padding-left: 2rem; margin: 0.7rem 0; }
+  li { margin-bottom: 0.45rem; }
+  code, .code {
+    font-family: "SF Mono", Menlo, monospace;
+    background: #313244; color: #a6e3a1;
+    padding: 0.1em 0.4em; border-radius: 6px; font-size: 0.85em;
+  }
+  pre {
+    font-family: "SF Mono", Menlo, monospace;
+    background: #11111b; color: #a6e3a1; font-size: 1.05rem;
+    padding: 1rem 1.3rem; border-radius: 10px; margin: 0.8rem 0;
+    overflow-x: auto; line-height: 1.45;
+  }
+  pre .c { color: #6c7086; }
+  pre .k { color: #cba6f7; }
+  .hl { color: #f9e2af; font-weight: 600; }
+  .bad { color: #f38ba8; }
+  .ok { color: #a6e3a1; }
+  .flow { display: flex; align-items: center; gap: 0.7rem; margin: 1rem 0; flex-wrap: wrap; }
+  .box {
+    background: #313244; border: 2px solid #89b4fa; border-radius: 10px;
+    padding: 0.7rem 1.2rem; font-size: 1.15rem; text-align: center;
+  }
+  .box.small { font-size: 1rem; padding: 0.45rem 0.9rem; }
+  .box.new { border-color: #f9e2af; }
+  .arrow { color: #89b4fa; font-size: 1.6rem; }
+  .note { color: #a6adc8; font-size: 1.05rem; margin-top: 1rem; }
+  table { border-collapse: collapse; margin: 0.8rem 0; }
+  th, td { border: 1px solid #45475a; padding: 0.5rem 1rem; font-size: 1.1rem; text-align: left; }
+  th { background: #313244; color: #89b4fa; }
+  #counter {
+    position: fixed; bottom: 2vh; right: 3vw;
+    color: #6c7086; font-size: 1rem;
+  }
+  #hint { position: fixed; bottom: 2vh; left: 3vw; color: #45475a; font-size: 0.95rem; }
+</style>
+</head>
+<body>
+
+<section class="slide">
+  <h1>Сквозной пайплайн</h1>
+  <p>От коммита до работающего приложения — одной цепочкой.</p>
+  <p class="note">GitHub Actions · Trivy · GHCR · Artifactory · docker compose</p>
+  <p class="note">Два занятия: занятие 1 — вместе, занятие 2 — самостоятельно</p>
+</section>
+
+<section class="slide">
+  <h2>Что мы уже умеем</h2>
+  <ul>
+    <li>Git — коммиты, ветки, теги</li>
+    <li>Docker — образы, контейнеры, compose</li>
+    <li>CI/CD — GitHub Actions, Jenkins, GitLab CI (лекция)</li>
+    <li>Artifactory — репозитории, публикация, remote/virtual</li>
+  </ul>
+  <p class="hl">Сегодня собираем из этого одну систему — и добавляем безопасность.</p>
+</section>
+
+<section class="slide">
+  <h2>Целевая картина</h2>
+  <div class="flow">
+    <div class="box small">git push</div><span class="arrow">→</span>
+    <div class="box small">lint + test</div><span class="arrow">→</span>
+    <div class="box small">docker build</div><span class="arrow">→</span>
+    <div class="box small new">Trivy</div><span class="arrow">→</span>
+    <div class="box small">push в GHCR</div>
+  </div>
+  <div class="flow">
+    <div class="box small">Artifactory<br>remote → GHCR</div><span class="arrow">→</span>
+    <div class="box small">staging → release<br>(promotion)</div><span class="arrow">→</span>
+    <div class="box small">docker compose<br>pull + up</div><span class="arrow">→</span>
+    <div class="box small">smoke: curl /health</div>
+  </div>
+  <p class="note">Каждый этап вы уже видели по отдельности. Сегодня — вместе.</p>
+</section>
+
+<section class="slide">
+  <h2>Зачем вообще CI</h2>
+  <ul>
+    <li>Код проверяется <span class="hl">на каждый пуш</span>, а не «когда вспомнили»</li>
+    <li>Проверки одинаковые для всех — не зависят от машины разработчика</li>
+    <li>Ошибка найдена через 2 минуты после пуша, а не на проде</li>
+    <li>Пайплайн — это <span class="hl">тот же скрипт</span>, что вы гоняете локально</li>
+  </ul>
+  <p class="note">Поэтому занятие 1 начинается с локального прогона: CI не должен делать ничего, чего вы не можете сделать руками.</p>
+</section>
+
+<section class="slide">
+  <h2>GitHub Actions: анатомия workflow</h2>
+  <pre><span class="k">on:</span>          <span class="c"># когда запускать (push, тег, расписание)</span>
+<span class="k">permissions:</span> <span class="c"># что можно токену прогона (packages: write!)</span>
+<span class="k">jobs:</span>
+  <span class="k">lint-test:</span>
+    <span class="k">runs-on:</span> ubuntu-latest  <span class="c"># где выполнять</span>
+    <span class="k">steps:</span>                  <span class="c"># что делать</span>
+      - <span class="k">uses:</span> actions/checkout@v4   <span class="c"># готовый action</span>
+      - <span class="k">run:</span> pytest app/tests -v    <span class="c"># или своя команда</span></pre>
+  <p><code>needs</code> связывает джобы в цепочку: упала первая — дальше не идём.</p>
+</section>
+
+<section class="slide">
+  <h2>Образ = артефакт сборки</h2>
+  <ul>
+    <li>Собираем образ <span class="hl">один раз</span> — в CI</li>
+    <li>Тег — <span class="hl">хэш коммита</span>: всегда понятно, из какого кода образ</li>
+    <li><code>latest</code> — удобный указатель, но не для отката</li>
+    <li>Дальше по цепочке едет именно этот бит — без пересборок</li>
+  </ul>
+  <p class="note">«У меня локально собирается» — антипаттерн. Образ из CI — единственный источник правды.</p>
+</section>
+
+<section class="slide">
+  <h2>Trivy: уязвимости в образе</h2>
+  <ul>
+    <li><span class="hl">CVE</span> — публично известная уязвимость в пакете</li>
+    <li>Severity: LOW → MEDIUM → HIGH → <span class="bad">CRITICAL</span></li>
+    <li>Базовый образ <code>python:3.8-slim</code> — десятки CVE, поддержка прекращена</li>
+    <li>Trivy сканирует образ за секунды и умеет <span class="hl">ронять пайплайн</span>: <code>exit-code: 1</code></li>
+  </ul>
+  <p class="bad">Уязвимый образ не должен доезжать до реестра.</p>
+  <p class="note">Подавлять находки можно — но осознанно: .trivyignore с обоснованием (занятие 2, задание 3).</p>
+</section>
+
+<section class="slide">
+  <h2>GHCR: где живут образы</h2>
+  <ul>
+    <li>GitHub Container Registry — реестр образов рядом с кодом</li>
+    <li>Бесплатен, авторизация через <code>GITHUB_TOKEN</code> — ничего заводить не надо</li>
+    <li>Образ привязан к репозиторию: <code>ghcr.io/&lt;логин&gt;/&lt;репо&gt;:&lt;тег&gt;</code></li>
+    <li>Имя — <span class="hl">только строчными буквами</span></li>
+  </ul>
+  <p class="note">GHCR — наш «внешний мир». А дальше образы должен раздавать Artifactory.</p>
+</section>
+
+<section class="slide">
+  <h2>Artifactory: единая точка входа</h2>
+  <div class="flow">
+    <div class="box small">GHCR<br>(интернет)</div><span class="arrow">→</span>
+    <div class="box small">docker-ghcr<br>remote, кэш</div><span class="arrow">→</span>
+    <div class="box small">docker<br>virtual</div><span class="arrow">→</span>
+    <div class="box small new">машины с приложением</div>
+  </div>
+  <ul>
+    <li>Машины с приложением ходят <span class="hl">только в Artifactory</span></li>
+    <li>Remote-репозиторий кэширует: второй pull — мгновенный, и работает даже если GHCR лёг</li>
+    <li>Полный аудит: кто, что и когда скачал</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>Staging → release: promotion</h2>
+  <div class="flow">
+    <div class="box small">docker-staging-local<br>«проверяем»</div><span class="arrow">→</span>
+    <div class="box small">jf rt docker-promote</div><span class="arrow">→</span>
+    <div class="box small new">docker-release-local<br>«можно в прод»</div>
+  </div>
+  <ul>
+    <li>В release попадает только то, что прошло проверки</li>
+    <li>Promotion — это <span class="hl">копирование проверенного артефакта</span>, а не новая сборка</li>
+    <li>Деплой смотрит только в release-репозиторий</li>
+  </ul>
+</section>
+
+<section class="slide">
+  <h2>Деплой без Kubernetes</h2>
+  <pre><span class="k">services:</span>
+  <span class="k">app:</span>
+    <span class="k">image:</span> localhost:8092/pipeline-lab:1.0.0  <span class="c"># release-репозиторий</span>
+    <span class="k">ports:</span> ["8080:8000"]</pre>
+  <ul>
+    <li><code>docker compose pull && up -d</code> — весь деплой</li>
+    <li>Smoke-проверка: <code>curl /health</code> после подъёма</li>
+    <li>Откат = поменять тег на предыдущий и поднять заново — <span class="hl">секунды</span></li>
+  </ul>
+  <p class="note">В бою здесь был бы Kubernetes или Ansible — принцип тот же: pull из реестра, не сборка на сервере.</p>
+</section>
+
+<section class="slide">
+  <h2>Откат</h2>
+  <ul>
+    <li>Старые версии <span class="hl">уже лежат</span> в реестре — ничего пересобирать не надо</li>
+    <li>Откат: тег назад → <code>compose up -d</code> → проверка версии</li>
+    <li>Поэтому теги образов должны быть осмысленными: хэш коммита или семвер, а не только <code>latest</code></li>
+  </ul>
+  <p class="note">Время отката — главная метрика зрелости пайплайна. Отрабатываем в задании 7.</p>
+</section>
+
+<section class="slide">
+  <h2>Jenkins — альтернатива</h2>
+  <ul>
+    <li>Тот же пайплайн можно записать на Jenkins — см. <code>jenkins-demo/Jenkinsfile</code></li>
+    <li>Концепции те же: stage ≈ job, agent ≈ runs-on, credentials ≈ secrets</li>
+    <li>В конце занятия 1 — короткий живой показ</li>
+  </ul>
+  <p class="hl">Подробно Jenkins разбираем на семинаре наставника.</p>
+</section>
+
+<section class="slide">
+  <h2>План двух занятий</h2>
+  <table>
+    <tr><th>Занятие 1 — вместе</th><th>Занятие 2 — самостоятельно</th></tr>
+    <tr><td>Локальный прогон → workflow</td><td>1. Кэширование</td></tr>
+    <tr><td>Сборка образа в CI</td><td>2. Версия из git-тега</td></tr>
+    <tr><td>Trivy: падаем и чиним</td><td>3. .trivyignore</td></tr>
+    <tr><td>Пуш в GHCR</td><td>4. Чиним сломанный пайплайн</td></tr>
+    <tr><td>Artifactory: remote + virtual</td><td>5. Smoke-тест в CI</td></tr>
+    <tr><td>Деплой через compose</td><td>6. Promotion staging → release</td></tr>
+    <tr><td>Показ Jenkins</td><td>7. Откат · 8. Полный цикл (зачёт)</td></tr>
+  </table>
+</section>
+
+<section class="slide">
+  <h2>Итоги</h2>
+  <ul>
+    <li>Пайплайн = проверки + сканер + реестр + деплой, одной цепочкой</li>
+    <li>Уязвимый образ не доезжает до реестра — Trivy роняет сборку</li>
+    <li>Прод ходит только в Artifactory, в прод едет только release</li>
+    <li>Откат — это старый тег, а не новая сборка</li>
+  </ul>
+  <p class="note">Вопросы?</p>
+</section>
+
+<div id="counter"></div>
+<div id="hint">← → — навигация</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let cur = 0;
+  const counter = document.getElementById('counter');
+  function show(i) {
+    cur = Math.max(0, Math.min(i, slides.length - 1));
+    slides.forEach((s, n) => s.classList.toggle('active', n === cur));
+    counter.textContent = (cur + 1) + ' / ' + slides.length;
+    location.hash = cur;
+  }
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) show(cur + 1);
+    if (['ArrowLeft', 'PageUp'].includes(e.key)) show(cur - 1);
+    if (e.key === 'Home') show(0);
+    if (e.key === 'End') show(slides.length - 1);
+  });
+  document.addEventListener('click', () => show(cur + 1));
+  show(parseInt(location.hash.slice(1)) || 0);
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# Деплой приложения: образ приезжает НЕ из GHCR напрямую,
+# а через Artifactory (виртуальный docker-репозиторий на порту 8090).
+services:
+  app:
+    image: localhost:8090/<ВПИШИТЕ логин github>/<ВПИШИТЕ имя репозитория>:latest
+    container_name: demo-app
+    ports:
+      - "8080:8000"
+    restart: unless-stopped

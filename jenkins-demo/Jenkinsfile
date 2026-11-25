@@ -1,0 +1,83 @@
+// Тот же пайплайн, что и .github/workflows/ci.yml, но на Jenkins.
+// Демонстрационный файл для показа преподавателем.
+// Подробный разбор Jenkins — на семинаре наставника.
+pipeline {
+    agent any
+
+    environment {
+        // ВПИШИТЕ своё: логин GitHub и имя репозитория (строчными!)
+        IMAGE = "ghcr.io/<ВПИШИТЕ логин>/pipeline-lab"
+    }
+
+    stages {
+        stage('Lint & Test') {
+            steps {
+                sh '''
+                    python3 -m venv venv
+                    . venv/bin/activate
+                    pip install -r app/requirements-dev.txt
+                    ruff check app
+                    pytest app/tests -v --junitxml=report.xml
+                '''
+            }
+            post {
+                always { junit 'report.xml' }
+            }
+        }
+
+        stage('Docker build') {
+            steps {
+                sh "docker build --build-arg APP_VERSION=${env.BUILD_NUMBER} -t ${IMAGE}:${env.BUILD_NUMBER} app"
+            }
+        }
+
+        stage('Trivy scan') {
+            steps {
+                // Trivy запускаем контейнером через сокет Docker хоста
+                sh """
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                        aquasec/trivy:latest image \
+                        --severity CRITICAL,HIGH --exit-code 1 \
+                        ${IMAGE}:${env.BUILD_NUMBER}
+                """
+            }
+        }
+
+        stage('Push to GHCR') {
+            steps {
+                // Логин и пароль хранятся в Credentials store Jenkins (id: ghcr)
+                withCredentials([usernamePassword(credentialsId: 'ghcr',
+                                                  usernameVariable: 'GH_USER',
+                                                  passwordVariable: 'GH_TOKEN')]) {
+                    sh '''
+                        echo "$GH_TOKEN" | docker login ghcr.io -u "$GH_USER" --password-stdin
+                        docker tag ${IMAGE}:${BUILD_NUMBER} ${IMAGE}:latest
+                        docker push ${IMAGE}:${BUILD_NUMBER}
+                        docker push ${IMAGE}:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Smoke test') {
+            steps {
+                sh '''
+                    docker run -d --name smoke -p 8000:8000 ${IMAGE}:${BUILD_NUMBER}
+                    for i in $(seq 1 10); do
+                        curl -sf http://localhost:8000/health && exit 0
+                        sleep 2
+                    done
+                    exit 1
+                '''
+            }
+            post {
+                always { sh 'docker rm -f smoke || true' }
+            }
+        }
+    }
+
+    post {
+        success { echo 'Pipeline зелёный — образ в GHCR, дальше деплой через Artifactory' }
+        failure { echo 'Pipeline упал — смотрим логи этапа' }
+    }
+}

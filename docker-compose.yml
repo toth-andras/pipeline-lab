@@ -1,0 +1,28 @@
+# Стенд лабораторной: JFrog Container Registry — бесплатная версия
+# Artifactory с поддержкой docker-репозиториев.
+# ВАЖНО: artifactory-oss из artifactory-lab docker-репозитории
+# НЕ поддерживает (только generic/maven) — поэтому здесь JCR.
+# Внешняя база не нужна: JCR работает на встроенной.
+services:
+  artifactory:
+    image: releases-docker.jfrog.io/jfrog/artifactory-jcr:latest
+    container_name: artifactory
+    environment:
+      JF_JFCONNECT_ENABLED: "false"   # без этого UI может не открываться
+    ports:
+      - "8081:8081"   # Artifactory API
+      - "8082:8082"   # веб-интерфейс (router)
+      - "8090:8090"   # docker-репозиторий (виртуальный) — назначим на занятии 1
+      - "8091:8091"   # docker-staging-local — понадобится на занятии 2
+      - "8092:8092"   # docker-release-local — понадобится на занятии 2
+    volumes:
+      - artifactory_data:/var/opt/jfrog/artifactory
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/router/api/v1/system/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+
+volumes:
+  artifactory_data:
